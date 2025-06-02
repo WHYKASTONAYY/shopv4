@@ -89,17 +89,10 @@ from admin import (
     handle_adm_bulk_add_drop, handle_adm_bulk_drop_dist, handle_adm_bulk_drop_confirm,
     handle_adm_bulk_remove_last, handle_adm_bulk_back_to_management, handle_adm_bulk_confirm_all,
     handle_adm_bulk_execute, cancel_bulk_add,
-    # Message handlers
+    # Only import message handlers that actually exist
     handle_adm_add_city_message, handle_adm_edit_city_message, handle_adm_add_district_message,
-    handle_adm_edit_district_message, handle_adm_add_type_message, handle_adm_add_type_emoji_message,
-    handle_adm_edit_type_emoji_message, handle_adm_custom_size_message, handle_adm_price_message,
-    handle_adm_drop_details_message, handle_adm_bot_media_message,
-    handle_adm_discount_code_message, handle_adm_discount_value_message,
-    handle_adm_welcome_template_name_message, handle_adm_welcome_template_text_message,
-    handle_adm_welcome_template_edit_message, handle_adm_welcome_description_message,
-    handle_adm_welcome_description_edit_message, handle_adm_welcome_confirmation_message,
-    handle_adm_reassign_old_type_name_message, handle_adm_reassign_new_type_name_message,
-    handle_adm_bulk_custom_size_message, handle_adm_bulk_price_message, handle_adm_bulk_drop_details_message,
+    handle_adm_edit_district_message, handle_adm_custom_size_message, handle_adm_price_message,
+    handle_adm_drop_details_message, handle_adm_bot_media_message
 )
 from viewer_admin import (
     handle_viewer_admin_menu,
