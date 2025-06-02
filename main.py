@@ -219,7 +219,6 @@ def callback_query_router(func):
                 "adm_add_type": admin.handle_adm_add_type,
                 "adm_delete_type": admin.handle_adm_delete_type,
                 "confirm_force_delete_prompt": admin.handle_confirm_force_delete_prompt, # Changed from confirm_force_delete_type
-                "adm_reassign_type_start": admin.handle_adm_reassign_type_start,
                 "adm_manage_discounts": admin.handle_adm_manage_discounts, "adm_toggle_discount": admin.handle_adm_toggle_discount,
                 "adm_delete_discount": admin.handle_adm_delete_discount, "adm_add_discount_start": admin.handle_adm_add_discount_start,
                 "adm_use_generated_code": admin.handle_adm_use_generated_code, "adm_set_discount_type": admin.handle_adm_set_discount_type,
