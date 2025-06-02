@@ -91,8 +91,8 @@ from admin import (
     handle_adm_bulk_execute, cancel_bulk_add,
     # Only import message handlers that actually exist
     handle_adm_add_city_message, handle_adm_edit_city_message, handle_adm_add_district_message,
-    handle_adm_edit_district_message, handle_adm_custom_size_message, handle_adm_price_message,
-    handle_adm_drop_details_message, handle_adm_bot_media_message
+    handle_adm_edit_district_message, handle_adm_custom_size_message,
+    handle_adm_drop_details_message
 )
 from viewer_admin import (
     handle_viewer_admin_menu,
@@ -325,13 +325,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'awaiting_edit_city_name': admin.handle_adm_edit_city_message,
         'awaiting_new_district_name': admin.handle_adm_add_district_message,
         'awaiting_edit_district_name': admin.handle_adm_edit_district_message,
-        'awaiting_new_type_name': admin.handle_adm_add_type_message,
-        'awaiting_new_type_emoji': admin.handle_adm_add_type_emoji_message,
-        'awaiting_edit_type_emoji': admin.handle_adm_edit_type_emoji_message,
         'awaiting_custom_size': admin.handle_adm_custom_size_message,
-        'awaiting_price': admin.handle_adm_price_message,
         'awaiting_drop_details': admin.handle_adm_drop_details_message,
-        'awaiting_bot_media': admin.handle_adm_bot_media_message,
         # Bulk product message handlers
         'awaiting_bulk_custom_size': admin.handle_adm_bulk_custom_size_message,
         'awaiting_bulk_price': admin.handle_adm_bulk_price_message,
