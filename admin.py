@@ -4157,21 +4157,13 @@ async def _process_bulk_collected_media(context: ContextTypes.DEFAULT_TYPE):
     
     logger.info(f"BULK JOB DEBUG: Added media group {media_group_id} as single message to bulk_messages. New count: {len(bulk_messages)}")
     
-    # Create a fake update object to show status
-    from telegram import Update, Message, Chat, User
-    fake_update = Update(
-        update_id=0,
-        effective_chat=Chat(id=chat_id, type="private"),
-        effective_user=User(id=user_id, first_name="Admin", is_bot=False),
-        message=Message(
-            message_id=0,
-            date=datetime.now(),
-            chat=Chat(id=chat_id, type="private")
-        )
-    )
-    
-    # Show updated status
-    await show_bulk_messages_status(fake_update, context)
+    # Send a simple status message instead of trying to create a fake Update object
+    try:
+        await send_message_with_retry(context.application.bot, chat_id, 
+            f"📦 Message {len(bulk_messages)} collected successfully! (Media group with {len(collected_media)} items)", 
+            parse_mode=None)
+    except Exception as e:
+        logger.warning(f"Could not send bulk status update: {e}")
 
 
 async def handle_adm_bulk_drop_details_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
