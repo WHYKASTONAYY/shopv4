@@ -300,7 +300,7 @@ async def handle_adm_drop_details_message(update: Update, context: ContextTypes.
         await send_message_with_retry(context.bot, chat_id, "❌ Error: Context lost. Please start adding product again.", parse_mode=None)
         keys_to_clear = ["state", "pending_drop", "pending_drop_size", "pending_drop_price", "collecting_media_group_id", "collected_media"]
         for key in keys_to_clear: user_specific_data.pop(key, None)
-         return
+        return
 
     media_group_id = update.message.media_group_id
     job_name = f"process_media_group_{user_id}_{media_group_id}" if media_group_id else None
@@ -350,7 +350,7 @@ async def handle_adm_drop_details_message(update: Update, context: ContextTypes.
     else:
         if user_specific_data.get('collecting_media_group_id'):
             logger.warning(f"Received single message from user {user_id} while potentially collecting media group {user_specific_data['collecting_media_group_id']}. Ignoring for drop.")
-        return
+            return
 
         logger.debug(f"Received single message (or text only) for drop details from user {user_id}")
         user_specific_data.pop('collecting_media_group_id', None)
