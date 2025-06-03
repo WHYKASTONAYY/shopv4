@@ -1046,11 +1046,11 @@ async def handle_adm_bulk_drop_details_message(update: Update, context: ContextT
         return
 
     # Extract message content
-        message_data = {
+    message_data = {
         "text": "",
-            "media": [],
-            "timestamp": int(time.time())
-        }
+        "media": [],
+        "timestamp": int(time.time())
+    }
 
     # Get text content
     if update.message.text:
@@ -1059,22 +1059,22 @@ async def handle_adm_bulk_drop_details_message(update: Update, context: ContextT
         message_data["text"] = update.message.caption.strip()
 
     # Get media content
-        if update.message.photo:
-            largest_photo = max(update.message.photo, key=lambda x: x.file_size or 0)
-            message_data["media"].append({"type": "photo", "file_id": largest_photo.file_id})
-        elif update.message.video:
-            message_data["media"].append({"type": "video", "file_id": update.message.video.file_id})
-        elif update.message.animation:
-            message_data["media"].append({"type": "animation", "file_id": update.message.animation.file_id})
-        elif update.message.document:
-            message_data["media"].append({"type": "document", "file_id": update.message.document.file_id})
+    if update.message.photo:
+        largest_photo = max(update.message.photo, key=lambda x: x.file_size or 0)
+        message_data["media"].append({"type": "photo", "file_id": largest_photo.file_id})
+    elif update.message.video:
+        message_data["media"].append({"type": "video", "file_id": update.message.video.file_id})
+    elif update.message.animation:
+        message_data["media"].append({"type": "animation", "file_id": update.message.animation.file_id})
+    elif update.message.document:
+        message_data["media"].append({"type": "document", "file_id": update.message.document.file_id})
 
-        # Store the message
-        bulk_messages.append(message_data)
-        context.user_data["bulk_messages"] = bulk_messages
-        
-        # Show updated status
-        await show_bulk_messages_status(update, context)
+    # Store the message
+    bulk_messages.append(message_data)
+    context.user_data["bulk_messages"] = bulk_messages
+    
+    # Show updated status
+    await show_bulk_messages_status(update, context)
 
 async def show_bulk_messages_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows the current status of collected bulk messages."""
