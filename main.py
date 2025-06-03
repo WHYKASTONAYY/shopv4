@@ -85,12 +85,9 @@ from admin import (
     # Bulk product handlers
     handle_adm_bulk_city, handle_adm_bulk_dist, handle_adm_bulk_type, handle_adm_bulk_add,
     handle_adm_bulk_size, handle_adm_bulk_custom_size, handle_adm_bulk_custom_size_message,
-    handle_adm_bulk_price_message, handle_adm_bulk_drop_details_message, show_bulk_drops_management,
-    handle_adm_bulk_add_drop, handle_adm_bulk_drop_dist, handle_adm_bulk_drop_confirm,
-    handle_adm_bulk_remove_last, handle_adm_bulk_back_to_management, handle_adm_bulk_confirm_all,
-    handle_adm_bulk_execute, cancel_bulk_add,
-    # New bulk message handlers
+    handle_adm_bulk_price_message, handle_adm_bulk_drop_details_message,
     handle_adm_bulk_remove_last_message, handle_adm_bulk_back_to_messages, handle_adm_bulk_execute_messages,
+    cancel_bulk_add,
     # Message handlers that actually exist
     handle_adm_add_city_message, handle_adm_edit_city_message, handle_adm_add_district_message,
     handle_adm_edit_district_message, handle_adm_custom_size_message,
@@ -254,13 +251,6 @@ def callback_query_router(func):
                 "adm_bulk_add": admin.handle_adm_bulk_add,
                 "adm_bulk_size": admin.handle_adm_bulk_size,
                 "adm_bulk_custom_size": admin.handle_adm_bulk_custom_size,
-                "adm_bulk_add_drop": admin.handle_adm_bulk_add_drop,
-                "adm_bulk_drop_dist": admin.handle_adm_bulk_drop_dist,
-                "adm_bulk_drop_confirm": admin.handle_adm_bulk_drop_confirm,
-                "adm_bulk_remove_last": admin.handle_adm_bulk_remove_last,
-                "adm_bulk_back_to_management": admin.handle_adm_bulk_back_to_management,
-                "adm_bulk_confirm_all": admin.handle_adm_bulk_confirm_all,
-                "adm_bulk_execute": admin.handle_adm_bulk_execute,
                 "cancel_bulk_add": admin.cancel_bulk_add,
                 # New bulk message handlers
                 "adm_bulk_remove_last_message": admin.handle_adm_bulk_remove_last_message,
