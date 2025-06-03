@@ -997,69 +997,157 @@ async def handle_adm_bulk_price_message(update: Update, context: ContextTypes.DE
     if price > 999999: return await send_message_with_retry(context.bot, chat_id, "❌ Price too high (max 999999).", parse_mode=None)
 
     context.user_data["bulk_pending_drop_price"] = price
-    context.user_data["state"] = "awaiting_bulk_drop_details"
-    keyboard = [[InlineKeyboardButton("❌ Cancel Bulk Add", callback_data="cancel_bulk_add")]]
+    context.user_data["state"] = "awaiting_bulk_messages"
+    
+    # Initialize bulk messages collection
+    context.user_data["bulk_messages"] = []
     
     price_str = format_currency(price)
     size = context.user_data.get("bulk_pending_drop_size", "")
     p_type = context.user_data.get("bulk_admin_product_type", "")
+    city = context.user_data.get("bulk_admin_city", "")
+    district = context.user_data.get("bulk_admin_district", "")
     type_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
     
-    msg = (f"📦 Bulk Products Setup\n\n"
+    msg = (f"📦 Bulk Products Setup Complete\n\n"
+           f"📍 Location: {city} / {district}\n"
            f"{type_emoji} Type: {p_type}\n"
            f"📏 Size: {size}\n"
            f"💰 Price: {price_str}€\n\n"
-           f"Now send the product description/details and any media (photos/videos). "
-           f"This will be used for all drops in this bulk operation.\n\n"
-           f"Reply with text or send media:")
+           f"Now forward or send up to 10 different messages. Each message can contain:\n"
+           f"• Photos, videos, GIFs\n"
+           f"• Text descriptions\n"
+           f"• Any combination of media and text\n\n"
+           f"Each message will become a separate product drop in this category.\n\n"
+           f"Messages collected: 0/10")
+    
+    keyboard = [
+        [InlineKeyboardButton("✅ Finish & Create Products", callback_data="adm_bulk_create_all")],
+        [InlineKeyboardButton("❌ Cancel Bulk Operation", callback_data="cancel_bulk_add")]
+    ]
     
     await send_message_with_retry(context.bot, chat_id, msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
 
 async def handle_adm_bulk_drop_details_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles the drop details/media message for bulk products - similar to regular drop details but transitions to bulk location selection."""
+    """Handles collecting multiple different messages for bulk products."""
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     if user_id != ADMIN_ID: return
     if not update.message: return
-    if context.user_data.get("state") != "awaiting_bulk_drop_details": return
+    if context.user_data.get("state") != "awaiting_bulk_messages": return
 
-    # Similar media handling as regular add product
-    collected_media_info = []
-    text = ""
+    bulk_messages = context.user_data.get("bulk_messages", [])
+    
+    # Check if we've reached the limit
+    if len(bulk_messages) >= 10:
+        await send_message_with_retry(context.bot, chat_id, 
+            "❌ You've already collected 10 messages (maximum). Please finish creating the products or cancel the operation.", 
+            parse_mode=None)
+        return
 
+    # Extract message content
+    message_data = {
+        "text": "",
+        "media": [],
+        "timestamp": int(time.time())
+    }
+
+    # Get text content
     if update.message.text:
-        text = update.message.text.strip()
+        message_data["text"] = update.message.text.strip()
+    elif update.message.caption:
+        message_data["text"] = update.message.caption.strip()
 
-    # Handle media
-    media_item = None
+    # Get media content
     if update.message.photo:
         largest_photo = max(update.message.photo, key=lambda x: x.file_size or 0)
-        media_item = {"type": "photo", "file_id": largest_photo.file_id}
+        message_data["media"].append({"type": "photo", "file_id": largest_photo.file_id})
     elif update.message.video:
-        media_item = {"type": "video", "file_id": update.message.video.file_id}
+        message_data["media"].append({"type": "video", "file_id": update.message.video.file_id})
     elif update.message.animation:
-        media_item = {"type": "animation", "file_id": update.message.animation.file_id}
+        message_data["media"].append({"type": "animation", "file_id": update.message.animation.file_id})
     elif update.message.document:
-        media_item = {"type": "document", "file_id": update.message.document.file_id}
+        message_data["media"].append({"type": "document", "file_id": update.message.document.file_id})
 
-    if media_item:
-        collected_media_info.append(media_item)
+    # Store the message
+    bulk_messages.append(message_data)
+    context.user_data["bulk_messages"] = bulk_messages
+    
+    # Show updated status
+    await show_bulk_messages_status(update, context)
 
-    # Store the template details for bulk operations
-    context.user_data["bulk_template"] = {
-        "original_text": text,
-        "media": collected_media_info,
-        "product_type": context.user_data.get("bulk_admin_product_type"),
-        "size": context.user_data.get("bulk_pending_drop_size"),
-        "price": context.user_data.get("bulk_pending_drop_price")
-    }
+async def show_bulk_messages_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows the current status of collected bulk messages."""
+    chat_id = update.effective_chat.id if update.effective_chat else update.message.chat_id
     
-    # Initialize bulk drops list
-    context.user_data["bulk_drops"] = []
-    context.user_data["state"] = None
+    bulk_messages = context.user_data.get("bulk_messages", [])
+    price = context.user_data.get("bulk_pending_drop_price", 0)
+    size = context.user_data.get("bulk_pending_drop_size", "")
+    p_type = context.user_data.get("bulk_admin_product_type", "")
+    city = context.user_data.get("bulk_admin_city", "")
+    district = context.user_data.get("bulk_admin_district", "")
+    type_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
+    price_str = format_currency(price)
     
-    # Now show the bulk drops management interface
-    await show_bulk_drops_management(update, context)
+    msg = (f"📦 Bulk Products Collection\n\n"
+           f"📍 Location: {city} / {district}\n"
+           f"{type_emoji} Type: {p_type}\n"
+           f"📏 Size: {size}\n"
+           f"💰 Price: {price_str}€\n\n"
+           f"Messages collected: {len(bulk_messages)}/10\n\n")
+    
+    if not bulk_messages:
+        msg += "No messages collected yet. Send or forward your first message with product details and media."
+    else:
+        msg += "Collected messages:\n"
+        for i, msg_data in enumerate(bulk_messages, 1):
+            text_preview = msg_data.get("text", "")[:50]
+            if len(text_preview) > 50:
+                text_preview += "..."
+            if not text_preview:
+                text_preview = "(No text)"
+            
+            media_count = len(msg_data.get("media", []))
+            media_info = f" + {media_count} media" if media_count > 0 else ""
+            
+            msg += f"{i}. {text_preview}{media_info}\n"
+    
+    msg += f"\n{10 - len(bulk_messages)} more messages can be added."
+    
+    keyboard = []
+    
+    if bulk_messages:
+        keyboard.append([InlineKeyboardButton("🗑️ Remove Last Message", callback_data="adm_bulk_remove_last_message")])
+        keyboard.append([InlineKeyboardButton("✅ Create All Products", callback_data="adm_bulk_create_all")])
+    
+    if len(bulk_messages) < 10:
+        msg += "\n\nSend or forward your next message..."
+    
+    keyboard.append([InlineKeyboardButton("❌ Cancel Bulk Operation", callback_data="cancel_bulk_add")])
+    
+    await send_message_with_retry(context.bot, chat_id, msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_adm_bulk_remove_last_message(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Removes the last collected message from bulk operation."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
+    
+    bulk_messages = context.user_data.get("bulk_messages", [])
+    if not bulk_messages:
+        return await query.answer("No messages to remove!", show_alert=True)
+    
+    removed_message = bulk_messages.pop()
+    context.user_data["bulk_messages"] = bulk_messages
+    
+    # Get some info about the removed message for feedback
+    text_preview = removed_message.get("text", "")[:30]
+    if len(text_preview) > 30:
+        text_preview += "..."
+    if not text_preview:
+        text_preview = "(media only)"
+    
+    await query.answer(f"Removed: {text_preview}")
+    await show_bulk_messages_status(update, context)
 
 async def show_bulk_drops_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows the bulk drops management interface where admin can add up to 10 drops."""
@@ -1203,39 +1291,52 @@ async def handle_adm_bulk_back_to_management(update: Update, context: ContextTyp
     await show_bulk_drops_management(update, context)
 
 async def handle_adm_bulk_confirm_all(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Confirms and creates all bulk drops."""
+    """Confirms and creates all products from the collected messages."""
     query = update.callback_query
     if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
     
-    bulk_template = context.user_data.get("bulk_template", {})
-    bulk_drops = context.user_data.get("bulk_drops", [])
+    bulk_messages = context.user_data.get("bulk_messages", [])
+    if not bulk_messages:
+        return await query.answer("No messages collected! Please add some messages first.", show_alert=True)
     
-    if not bulk_drops:
-        return await query.answer("No drops to create!", show_alert=True)
+    # Get all the setup data
+    city = context.user_data.get("bulk_admin_city", "")
+    district = context.user_data.get("bulk_admin_district", "")
+    p_type = context.user_data.get("bulk_admin_product_type", "")
+    size = context.user_data.get("bulk_pending_drop_size", "")
+    price = context.user_data.get("bulk_pending_drop_price", 0)
     
-    if not bulk_template:
-        return await query.edit_message_text("❌ Error: Bulk template data missing. Please start again.", parse_mode=None)
+    if not all([city, district, p_type, size, price]):
+        return await query.edit_message_text("❌ Error: Missing setup data. Please start again.", parse_mode=None)
     
     # Show confirmation
-    p_type = bulk_template.get("product_type", "")
-    size = bulk_template.get("size", "")
-    price = bulk_template.get("price", 0)
     type_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
     price_str = format_currency(price)
     
     msg = f"⚠️ Confirm Bulk Creation\n\n"
-    msg += f"You are about to create {len(bulk_drops)} products:\n\n"
+    msg += f"You are about to create {len(bulk_messages)} products:\n\n"
+    msg += f"📍 Location: {city} / {district}\n"
     msg += f"{type_emoji} Type: {p_type}\n"
     msg += f"📏 Size: {size}\n"
     msg += f"💰 Price: {price_str}€\n\n"
-    msg += f"Locations:\n"
-    for i, drop in enumerate(bulk_drops, 1):
-        msg += f"{i}. {drop['city']} / {drop['district']}\n"
+    msg += f"Products to create:\n"
+    for i, msg_data in enumerate(bulk_messages, 1):
+        text_preview = msg_data.get("text", "")[:40]
+        if len(text_preview) > 40:
+            text_preview += "..."
+        if not text_preview:
+            text_preview = "(media only)"
+        
+        media_count = len(msg_data.get("media", []))
+        media_info = f" + {media_count} media" if media_count > 0 else ""
+        
+        msg += f"{i}. {text_preview}{media_info}\n"
+    
     msg += f"\nProceed with creation?"
     
     keyboard = [
-        [InlineKeyboardButton("✅ Yes, Create All", callback_data="adm_bulk_execute")],
-        [InlineKeyboardButton("❌ No, Go Back", callback_data="adm_bulk_back_to_management")]
+        [InlineKeyboardButton("✅ Yes, Create All Products", callback_data="adm_bulk_execute_messages")],
+        [InlineKeyboardButton("❌ No, Go Back", callback_data="adm_bulk_back_to_messages")]
     ]
     
     await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
@@ -1405,7 +1506,7 @@ async def cancel_bulk_add(update: Update, context: ContextTypes.DEFAULT_TYPE, pa
     # Clear all bulk-related data
     keys_to_clear = ["state", "bulk_template", "bulk_drops", "bulk_admin_city_id", "bulk_admin_district_id", 
                      "bulk_admin_product_type", "bulk_admin_city", "bulk_admin_district", 
-                     "bulk_pending_drop_size", "bulk_pending_drop_price"]
+                     "bulk_pending_drop_size", "bulk_pending_drop_price", "bulk_messages"]
     for key in keys_to_clear:
         user_specific_data.pop(key, None)
     
@@ -3782,3 +3883,295 @@ async def handle_adm_edit_type_emoji_message(update: Update, context: ContextTyp
         context.user_data.pop("state", None)
     finally:
         if conn: conn.close()
+
+async def handle_adm_bulk_back_to_messages(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Returns to the message collection interface."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
+    
+    context.user_data["state"] = "awaiting_bulk_messages"
+    await show_bulk_messages_status(update, context)
+
+async def handle_adm_bulk_execute_messages(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Executes the bulk product creation from collected messages."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
+    
+    chat_id = query.message.chat_id
+    bulk_messages = context.user_data.get("bulk_messages", [])
+    
+    # Get setup data
+    city = context.user_data.get("bulk_admin_city", "")
+    district = context.user_data.get("bulk_admin_district", "")
+    p_type = context.user_data.get("bulk_admin_product_type", "")
+    size = context.user_data.get("bulk_pending_drop_size", "")
+    price = context.user_data.get("bulk_pending_drop_price", 0)
+    
+    if not bulk_messages or not all([city, district, p_type, size, price]):
+        return await query.edit_message_text("❌ Error: Missing data. Please start again.", parse_mode=None)
+    
+    await query.edit_message_text("⏳ Creating bulk products...", parse_mode=None)
+    
+    created_count = 0
+    failed_count = 0
+    
+    # Process each message as a separate product
+    for i, message_data in enumerate(bulk_messages):
+        text_content = message_data.get("text", "")
+        media_list = message_data.get("media", [])
+        
+        # Create unique product name
+        product_name = f"{p_type} {size} {int(time.time())}_{i+1}"
+        
+        conn = None
+        product_id = None
+        temp_dir = None
+        
+        try:
+            # Download media if present
+            if media_list:
+                temp_dir = await asyncio.to_thread(tempfile.mkdtemp, prefix="bulk_msg_media_")
+                
+                for j, media_item in enumerate(media_list):
+                    try:
+                        file_obj = await context.bot.get_file(media_item["file_id"])
+                        file_extension = os.path.splitext(file_obj.file_path)[1] if file_obj.file_path else ""
+                        if not file_extension:
+                            if media_item["type"] == "photo": file_extension = ".jpg"
+                            elif media_item["type"] == "video": file_extension = ".mp4"
+                            elif media_item["type"] == "animation": file_extension = ".gif"
+                            else: file_extension = ".bin"
+                        
+                        temp_file_path = os.path.join(temp_dir, f"media_{j}_{int(time.time())}{file_extension}")
+                        await file_obj.download_to_drive(temp_file_path)
+                        media_item["path"] = temp_file_path
+                    except Exception as e:
+                        logger.error(f"Error downloading media for bulk message {i+1}: {e}")
+                        failed_count += 1
+            
+            # Create product in database
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("BEGIN")
+            
+            insert_params = (
+                city, district, p_type, size, product_name, price, text_content, ADMIN_ID, datetime.now(timezone.utc).isoformat()
+            )
+            
+            c.execute("""INSERT INTO products
+                            (city, district, product_type, size, name, price, available, reserved, original_text, added_by, added_date)
+                         VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)""", insert_params)
+            product_id = c.lastrowid
+            
+            # Handle media for this product
+            if product_id and media_list and temp_dir:
+                final_media_dir = os.path.join(MEDIA_DIR, str(product_id))
+                await asyncio.to_thread(os.makedirs, final_media_dir, exist_ok=True)
+                
+                media_inserts = []
+                for media_item in media_list:
+                    if "path" in media_item and "type" in media_item and "file_id" in media_item:
+                        temp_file_path = media_item["path"]
+                        if await asyncio.to_thread(os.path.exists, temp_file_path):
+                            new_filename = os.path.basename(temp_file_path)
+                            final_persistent_path = os.path.join(final_media_dir, new_filename)
+                            try:
+                                await asyncio.to_thread(shutil.move, temp_file_path, final_persistent_path)
+                                media_inserts.append((product_id, media_item["type"], final_persistent_path, media_item["file_id"]))
+                            except OSError as move_err:
+                                logger.error(f"Error moving media {temp_file_path}: {move_err}")
+                        else:
+                            logger.warning(f"Temp media not found: {temp_file_path}")
+                    else:
+                        logger.warning(f"Incomplete media item: {media_item}")
+                
+                if media_inserts:
+                    c.executemany("INSERT INTO product_media (product_id, media_type, file_path, telegram_file_id) VALUES (?, ?, ?, ?)", media_inserts)
+            
+            conn.commit()
+            created_count += 1
+            logger.info(f"Bulk created product {product_id} ({product_name}) from message {i+1}")
+            
+        except Exception as e:
+            failed_count += 1
+            logger.error(f"Error creating bulk product from message {i+1}: {e}", exc_info=True)
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception as rb_err:
+                    logger.error(f"Rollback failed: {rb_err}")
+        finally:
+            if conn:
+                conn.close()
+            
+            # Clean up temp directory for this message
+            if temp_dir and await asyncio.to_thread(os.path.exists, temp_dir):
+                await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
+    
+    # Clear bulk data from context
+    keys_to_clear = ["bulk_messages", "bulk_admin_city_id", "bulk_admin_district_id", 
+                     "bulk_admin_product_type", "bulk_admin_city", "bulk_admin_district", 
+                     "bulk_pending_drop_size", "bulk_pending_drop_price", "state"]
+    for key in keys_to_clear:
+        context.user_data.pop(key, None)
+    
+    # Show results
+    type_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
+    result_msg = f"✅ Bulk Operation Complete!\n\n"
+    result_msg += f"📍 Location: {city} / {district}\n"
+    result_msg += f"{type_emoji} Product: {p_type} {size}\n"
+    result_msg += f"💰 Price: {format_currency(price)}€\n\n"
+    result_msg += f"📊 Results:\n"
+    result_msg += f"✅ Created: {created_count} products\n"
+    if failed_count > 0:
+        result_msg += f"❌ Failed: {failed_count}\n"
+    result_msg += f"\nEach message became a separate product drop in the same category!"
+    
+    keyboard = [
+        [InlineKeyboardButton("📦 Add More Bulk Products", callback_data="adm_bulk_city")],
+        [InlineKeyboardButton("🔧 Admin Menu", callback_data="admin_menu"), 
+         InlineKeyboardButton("🏠 User Home", callback_data="back_start")]
+    ]
+    
+    await send_message_with_retry(context.bot, chat_id, result_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_adm_bulk_execute(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
+    """Executes the bulk product creation."""
+    query = update.callback_query
+    if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
+    
+    chat_id = query.message.chat_id
+    bulk_template = context.user_data.get("bulk_template", {})
+    bulk_drops = context.user_data.get("bulk_drops", [])
+    
+    if not bulk_drops or not bulk_template:
+        return await query.edit_message_text("❌ Error: Missing bulk data. Please start again.", parse_mode=None)
+    
+    await query.edit_message_text("⏳ Creating bulk products...", parse_mode=None)
+    
+    p_type = bulk_template.get("product_type", "")
+    size = bulk_template.get("size", "")
+    price = bulk_template.get("price", 0)
+    original_text = bulk_template.get("original_text", "")
+    media_list = bulk_template.get("media", [])
+    
+    created_count = 0
+    failed_count = 0
+    
+    # Create a temporary directory for media if needed
+    temp_dir = None
+    if media_list:
+        import tempfile
+        temp_dir = await asyncio.to_thread(tempfile.mkdtemp, prefix="bulk_media_")
+        
+        # Download media to temp directory
+        for i, media_item in enumerate(media_list):
+            try:
+                file_obj = await context.bot.get_file(media_item["file_id"])
+                file_extension = os.path.splitext(file_obj.file_path)[1] if file_obj.file_path else ""
+                if not file_extension:
+                    if media_item["type"] == "photo": file_extension = ".jpg"
+                    elif media_item["type"] == "video": file_extension = ".mp4"
+                    elif media_item["type"] == "animation": file_extension = ".gif"
+                    else: file_extension = ".bin"
+                
+                temp_file_path = os.path.join(temp_dir, f"media_{i}_{int(time.time())}{file_extension}")
+                await file_obj.download_to_drive(temp_file_path)
+                media_item["path"] = temp_file_path
+            except Exception as e:
+                logger.error(f"Error downloading media for bulk operation: {e}")
+                failed_count += 1
+    
+    # Create products for each location
+    for drop in bulk_drops:
+        city = drop["city"]
+        district = drop["district"]
+        product_name = f"{p_type} {size} {int(time.time())}"
+        
+        conn = None
+        product_id = None
+        try:
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("BEGIN")
+            
+            insert_params = (
+                city, district, p_type, size, product_name, price, original_text, ADMIN_ID, datetime.now(timezone.utc).isoformat()
+            )
+            
+            c.execute("""INSERT INTO products
+                            (city, district, product_type, size, name, price, available, reserved, original_text, added_by, added_date)
+                         VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?, ?)""", insert_params)
+            product_id = c.lastrowid
+            
+            # Handle media for this product
+            if product_id and media_list and temp_dir:
+                final_media_dir = os.path.join(MEDIA_DIR, str(product_id))
+                await asyncio.to_thread(os.makedirs, final_media_dir, exist_ok=True)
+                
+                media_inserts = []
+                for media_item in media_list:
+                    if "path" in media_item and "type" in media_item and "file_id" in media_item:
+                        temp_file_path = media_item["path"]
+                        if await asyncio.to_thread(os.path.exists, temp_file_path):
+                            new_filename = os.path.basename(temp_file_path)
+                            final_persistent_path = os.path.join(final_media_dir, new_filename)
+                            try:
+                                # Copy instead of move so we can reuse for other products
+                                await asyncio.to_thread(shutil.copy2, temp_file_path, final_persistent_path)
+                                media_inserts.append((product_id, media_item["type"], final_persistent_path, media_item["file_id"]))
+                            except OSError as move_err:
+                                logger.error(f"Error copying media {temp_file_path}: {move_err}")
+                        else:
+                            logger.warning(f"Temp media not found: {temp_file_path}")
+                    else:
+                        logger.warning(f"Incomplete media item: {media_item}")
+                
+                if media_inserts:
+                    c.executemany("INSERT INTO product_media (product_id, media_type, file_path, telegram_file_id) VALUES (?, ?, ?, ?)", media_inserts)
+            
+            conn.commit()
+            created_count += 1
+            logger.info(f"Bulk created product {product_id} ({product_name}) in {city}/{district}")
+            
+        except Exception as e:
+            failed_count += 1
+            logger.error(f"Error creating bulk product in {city}/{district}: {e}", exc_info=True)
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception as rb_err:
+                    logger.error(f"Rollback failed: {rb_err}")
+        finally:
+            if conn:
+                conn.close()
+    
+    # Clean up temp directory
+    if temp_dir and await asyncio.to_thread(os.path.exists, temp_dir):
+        await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
+        logger.info(f"Cleaned bulk temp dir: {temp_dir}")
+    
+    # Clear bulk data from context
+    keys_to_clear = ["bulk_template", "bulk_drops", "bulk_admin_city_id", "bulk_admin_district_id", 
+                     "bulk_admin_product_type", "bulk_admin_city", "bulk_admin_district", 
+                     "bulk_pending_drop_size", "bulk_pending_drop_price", "state"]
+    for key in keys_to_clear:
+        context.user_data.pop(key, None)
+    
+    # Show results
+    type_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
+    result_msg = f"✅ Bulk Operation Complete!\n\n"
+    result_msg += f"{type_emoji} Product: {p_type} {size}\n"
+    result_msg += f"💰 Price: {format_currency(price)}€\n\n"
+    result_msg += f"📊 Results:\n"
+    result_msg += f"✅ Created: {created_count}\n"
+    if failed_count > 0:
+        result_msg += f"❌ Failed: {failed_count}\n"
+    
+    keyboard = [
+        [InlineKeyboardButton("📦 Add More Bulk Products", callback_data="adm_bulk_city")],
+        [InlineKeyboardButton("🔧 Admin Menu", callback_data="admin_menu"), 
+         InlineKeyboardButton("🏠 User Home", callback_data="back_start")]
+    ]
+    
+    await send_message_with_retry(context.bot, chat_id, result_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
