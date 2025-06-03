@@ -3545,4 +3545,240 @@ async def handle_adm_custom_size_message(update: Update, context: ContextTypes.D
     context.user_data["state"] = "awaiting_price"
     keyboard = [[InlineKeyboardButton("❌ Cancel Add", callback_data="cancel_add")]]
     await send_message_with_retry(context.bot, chat_id, f"Custom size set to '{custom_size}'. Reply with the price (e.g., 12.50):",
-                            reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+                                  reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_adm_price_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles price input for regular product adding."""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    if user_id != ADMIN_ID: return
+    if not update.message or not update.message.text: return
+    if context.user_data.get("state") != "awaiting_price": return
+    
+    price_text = update.message.text.strip()
+    if not price_text:
+        return await send_message_with_retry(context.bot, chat_id, "Price cannot be empty.", parse_mode=None)
+    
+    try:
+        price = float(price_text)
+        if price <= 0:
+            return await send_message_with_retry(context.bot, chat_id, "Price must be greater than 0.", parse_mode=None)
+        if price > 10000:
+            return await send_message_with_retry(context.bot, chat_id, "Price too high (max 10000).", parse_mode=None)
+    except ValueError:
+        return await send_message_with_retry(context.bot, chat_id, "Invalid price format. Use numbers like 12.50", parse_mode=None)
+    
+    # Check required context
+    if not all(k in context.user_data for k in ["admin_city", "admin_district", "admin_product_type", "pending_drop_size"]):
+        await send_message_with_retry(context.bot, chat_id, "❌ Error: Context lost.", parse_mode=None)
+        context.user_data.pop("state", None)
+        return
+    
+    context.user_data["pending_drop_price"] = price
+    context.user_data["state"] = "awaiting_drop_details"
+    
+    await send_message_with_retry(context.bot, chat_id, 
+        f"💰 Price set to: {price:.2f}€\n\n"
+        "📝 Now please send the product details (description/name) and any media (photos/videos/GIFs).\n\n"
+        "You can send text, images, videos, GIFs, or a combination.\n"
+        "When finished, send any message with the text 'done' to confirm.", 
+        parse_mode=None)
+
+# --- Product Type Message Handlers ---
+
+async def handle_adm_new_type_name_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles new product type name input."""
+    if update.effective_user.id != ADMIN_ID: return
+    if not update.message or not update.message.text: return
+    
+    type_name = update.message.text.strip()
+    if not type_name:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Please enter a valid type name.", parse_mode=None)
+        return
+    
+    # Check if type already exists
+    load_all_data()
+    if type_name in PRODUCT_TYPES:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            f"❌ Product type '{type_name}' already exists. Please choose a different name.", parse_mode=None)
+        return
+    
+    # Store the type name and ask for emoji
+    context.user_data["new_type_name"] = type_name
+    context.user_data["state"] = "awaiting_new_type_emoji"
+    
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_types")]]
+    await send_message_with_retry(context.bot, update.effective_chat.id, 
+        f"🧩 Product Type: {type_name}\n\n"
+        "✍️ Please reply with a single emoji for this product type:", 
+        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_adm_new_type_emoji_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles new product type emoji input."""
+    if update.effective_user.id != ADMIN_ID: return
+    if not update.message or not update.message.text: return
+    
+    emoji = update.message.text.strip()
+    if not emoji:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Please enter a valid emoji.", parse_mode=None)
+        return
+    
+    # Basic emoji validation (check if it's a single character or emoji)
+    if len(emoji) > 4:  # Allow for multi-byte emojis
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Please enter only a single emoji.", parse_mode=None)
+        return
+    
+    # Store the emoji and ask for description
+    context.user_data["new_type_emoji"] = emoji
+    context.user_data["state"] = "awaiting_new_type_description"
+    
+    type_name = context.user_data.get("new_type_name", "Unknown")
+    keyboard = [[InlineKeyboardButton("❌ Cancel", callback_data="adm_manage_types")]]
+    await send_message_with_retry(context.bot, update.effective_chat.id, 
+        f"🧩 Product Type: {emoji} {type_name}\n\n"
+        "📝 Please reply with a description for this product type (or send 'skip' to leave empty):", 
+        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+async def handle_adm_new_type_description_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles new product type description input and creates the type."""
+    if update.effective_user.id != ADMIN_ID: return
+    if not update.message or not update.message.text: return
+    
+    description = update.message.text.strip()
+    if description.lower() == 'skip':
+        description = None
+    elif not description:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Please enter a description or send 'skip' to leave empty.", parse_mode=None)
+        return
+    
+    type_name = context.user_data.get("new_type_name")
+    emoji = context.user_data.get("new_type_emoji")
+    
+    if not type_name or not emoji:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Error: Missing type name or emoji. Please start over.", parse_mode=None)
+        context.user_data.pop("state", None)
+        return
+    
+    # Save to database
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("INSERT INTO product_types (name, emoji, description) VALUES (?, ?, ?)", 
+                  (type_name, emoji, description))
+        conn.commit()
+        load_all_data()  # Reload data
+        
+        context.user_data.pop("state", None)
+        context.user_data.pop("new_type_name", None)
+        context.user_data.pop("new_type_emoji", None)
+        
+        log_admin_action(admin_id=update.effective_user.id, action="PRODUCT_TYPE_ADD", 
+                        reason=f"Added type '{type_name}' with emoji '{emoji}'", 
+                        new_value=type_name)
+        
+        # Create the manage types keyboard to show the updated list
+        keyboard = []
+        for existing_type_name, existing_emoji in sorted(PRODUCT_TYPES.items()):
+            keyboard.append([
+                InlineKeyboardButton(f"{existing_emoji} {existing_type_name}", callback_data=f"adm_edit_type_menu|{existing_type_name}"),
+                InlineKeyboardButton(f"🗑️ Delete", callback_data=f"adm_delete_type|{existing_type_name}")
+            ])
+        keyboard.extend([
+            [InlineKeyboardButton("➕ Add New Type", callback_data="adm_add_type")],
+            [InlineKeyboardButton("⬅️ Back to Admin Menu", callback_data="admin_menu")]
+        ])
+        
+        success_msg = f"✅ Product type '{emoji} {type_name}' created successfully!"
+        if description:
+            success_msg += f"\nDescription: {description}"
+        success_msg += "\n\n🧩 Manage Product Types\n\nSelect a type to edit or delete:"
+        
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            success_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        
+    except sqlite3.Error as e:
+        logger.error(f"DB error creating product type '{type_name}': {e}", exc_info=True)
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Database error creating product type. Please try again.", parse_mode=None)
+        context.user_data.pop("state", None)
+    finally:
+        if conn: conn.close()
+
+async def handle_adm_edit_type_emoji_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles editing product type emoji input."""
+    if update.effective_user.id != ADMIN_ID: return
+    if not update.message or not update.message.text: return
+    
+    emoji = update.message.text.strip()
+    if not emoji:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Please enter a valid emoji.", parse_mode=None)
+        return
+    
+    # Basic emoji validation
+    if len(emoji) > 4:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Please enter only a single emoji.", parse_mode=None)
+        return
+    
+    type_name = context.user_data.get("edit_type_name")
+    if not type_name:
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Error: Type name not found. Please start over.", parse_mode=None)
+        context.user_data.pop("state", None)
+        return
+    
+    # Update emoji in database
+    conn = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("UPDATE product_types SET emoji = ? WHERE name = ?", (emoji, type_name))
+        
+        if c.rowcount > 0:
+            conn.commit()
+            load_all_data()  # Reload data
+            
+            context.user_data.pop("state", None)
+            context.user_data.pop("edit_type_name", None)
+            
+            log_admin_action(admin_id=update.effective_user.id, action="PRODUCT_TYPE_EDIT", 
+                            reason=f"Changed emoji for type '{type_name}' to '{emoji}'", 
+                            old_value=type_name, new_value=f"{emoji} {type_name}")
+            
+            # Show updated type info
+            current_description = ""
+            c.execute("SELECT description FROM product_types WHERE name = ?", (type_name,))
+            res = c.fetchone()
+            if res: current_description = res['description'] or "(Description not set)"
+            
+            keyboard = [
+                [InlineKeyboardButton("✏️ Change Emoji", callback_data=f"adm_change_type_emoji|{type_name}")],
+                [InlineKeyboardButton("🗑️ Delete Type", callback_data=f"adm_delete_type|{type_name}")],
+                [InlineKeyboardButton("⬅️ Back to Manage Types", callback_data="adm_manage_types")]
+            ]
+            
+            await send_message_with_retry(context.bot, update.effective_chat.id, 
+                f"✅ Emoji updated successfully!\n\n"
+                f"🧩 Editing Type: {type_name}\n\n"
+                f"Current Emoji: {emoji}\n"
+                f"Description: {current_description}\n\n"
+                f"What would you like to do?", 
+                reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+        else:
+            await send_message_with_retry(context.bot, update.effective_chat.id, 
+                f"❌ Error: Product type '{type_name}' not found.", parse_mode=None)
+            context.user_data.pop("state", None)
+    except sqlite3.Error as e:
+        logger.error(f"DB error updating emoji for type '{type_name}': {e}", exc_info=True)
+        await send_message_with_retry(context.bot, update.effective_chat.id, 
+            "❌ Database error updating emoji. Please try again.", parse_mode=None)
+        context.user_data.pop("state", None)
+    finally:
+        if conn: conn.close()
