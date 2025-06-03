@@ -89,13 +89,15 @@ from admin import (
     handle_adm_bulk_add_drop, handle_adm_bulk_drop_dist, handle_adm_bulk_drop_confirm,
     handle_adm_bulk_remove_last, handle_adm_bulk_back_to_management, handle_adm_bulk_confirm_all,
     handle_adm_bulk_execute, cancel_bulk_add,
+    # New bulk message handlers
+    handle_adm_bulk_remove_last_message, handle_adm_bulk_back_to_messages, handle_adm_bulk_execute_messages,
     # Message handlers that actually exist
     handle_adm_add_city_message, handle_adm_edit_city_message, handle_adm_add_district_message,
     handle_adm_edit_district_message, handle_adm_custom_size_message,
     handle_adm_drop_details_message, handle_adm_price_message,
     # Product type message handlers
     handle_adm_new_type_name_message, handle_adm_new_type_emoji_message,
-    handle_adm_new_type_description_message, handle_adm_edit_type_emoji_message
+    handle_adm_new_type_description_message, handle_adm_edit_type_emoji_message,
 )
 from viewer_admin import (
     handle_viewer_admin_menu,
@@ -260,6 +262,11 @@ def callback_query_router(func):
                 "adm_bulk_confirm_all": admin.handle_adm_bulk_confirm_all,
                 "adm_bulk_execute": admin.handle_adm_bulk_execute,
                 "cancel_bulk_add": admin.cancel_bulk_add,
+                # New bulk message handlers
+                "adm_bulk_remove_last_message": admin.handle_adm_bulk_remove_last_message,
+                "adm_bulk_back_to_messages": admin.handle_adm_bulk_back_to_messages,
+                "adm_bulk_execute_messages": admin.handle_adm_bulk_execute_messages,
+                "adm_bulk_create_all": admin.handle_adm_bulk_confirm_all,
 
                 # Viewer Admin Handlers (from viewer_admin.py)
                 "viewer_admin_menu": handle_viewer_admin_menu,
@@ -339,6 +346,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'awaiting_bulk_custom_size': admin.handle_adm_bulk_custom_size_message,
         'awaiting_bulk_price': admin.handle_adm_bulk_price_message,
         'awaiting_bulk_drop_details': admin.handle_adm_bulk_drop_details_message,
+        'awaiting_bulk_messages': admin.handle_adm_bulk_drop_details_message,
 
         # User Management States (from viewer_admin.py)
         'awaiting_balance_adjustment_amount': handle_adjust_balance_amount_message,
