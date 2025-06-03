@@ -1045,36 +1045,77 @@ async def handle_adm_bulk_drop_details_message(update: Update, context: ContextT
             parse_mode=None)
         return
 
-    # Extract message content
-    message_data = {
-        "text": "",
-        "media": [],
-        "timestamp": int(time.time())
-    }
+    media_group_id = update.message.media_group_id
+    job_name = f"process_bulk_media_group_{user_id}_{media_group_id}" if media_group_id else None
 
-    # Get text content
-    if update.message.text:
-        message_data["text"] = update.message.text.strip()
-    elif update.message.caption:
-        message_data["text"] = update.message.caption.strip()
+    media_type, file_id = None, None
+    if update.message.photo: media_type, file_id = "photo", update.message.photo[-1].file_id
+    elif update.message.video: media_type, file_id = "video", update.message.video.file_id
+    elif update.message.animation: media_type, file_id = "animation", update.message.animation.file_id
 
-    # Get media content
-    if update.message.photo:
-        largest_photo = max(update.message.photo, key=lambda x: x.file_size or 0)
-        message_data["media"].append({"type": "photo", "file_id": largest_photo.file_id})
-    elif update.message.video:
-        message_data["media"].append({"type": "video", "file_id": update.message.video.file_id})
-    elif update.message.animation:
-        message_data["media"].append({"type": "animation", "file_id": update.message.animation.file_id})
-    elif update.message.document:
-        message_data["media"].append({"type": "document", "file_id": update.message.document.file_id})
+    text = (update.message.caption or update.message.text or "").strip()
 
-    # Store the message
-    bulk_messages.append(message_data)
-    context.user_data["bulk_messages"] = bulk_messages
-    
-    # Show updated status
-    await show_bulk_messages_status(update, context)
+    if media_group_id:
+        logger.debug(f"Received bulk message part of media group {media_group_id} from user {user_id}")
+        if 'bulk_collected_media' not in context.user_data:
+            context.user_data['bulk_collected_media'] = {}
+
+        if media_group_id not in context.user_data['bulk_collected_media']:
+            context.user_data['bulk_collected_media'][media_group_id] = {'media': [], 'caption': None}
+            logger.info(f"Started collecting bulk media for group {media_group_id} user {user_id}")
+            context.user_data['bulk_collecting_media_group_id'] = media_group_id
+
+        if media_type and file_id:
+            if not any(m['file_id'] == file_id for m in context.user_data['bulk_collected_media'][media_group_id]['media']):
+                context.user_data['bulk_collected_media'][media_group_id]['media'].append(
+                    {'type': media_type, 'file_id': file_id}
+                )
+                logger.debug(f"Added bulk media {file_id} ({media_type}) to group {media_group_id}")
+
+        if text:
+            context.user_data['bulk_collected_media'][media_group_id]['caption'] = text
+            logger.debug(f"Stored/updated bulk caption for group {media_group_id}")
+
+        remove_job_if_exists(job_name, context)
+        if hasattr(context, 'job_queue') and context.job_queue:
+            context.job_queue.run_once(
+                _process_bulk_collected_media,
+                when=timedelta(seconds=MEDIA_GROUP_COLLECTION_DELAY),
+                data={'media_group_id': media_group_id, 'chat_id': chat_id, 'user_id': user_id},
+                name=job_name,
+                job_kwargs={'misfire_grace_time': 15}
+            )
+            logger.debug(f"Scheduled/Rescheduled bulk job {job_name} for media group {media_group_id}")
+        else:
+            logger.error("JobQueue not found in context. Cannot schedule bulk media group processing.")
+            await send_message_with_retry(context.bot, chat_id, "❌ Error: Internal components missing. Cannot process media group.", parse_mode=None)
+
+    else:
+        if context.user_data.get('bulk_collecting_media_group_id'):
+            logger.warning(f"Received single bulk message from user {user_id} while potentially collecting media group {context.user_data['bulk_collecting_media_group_id']}. Ignoring for bulk.")
+            return
+
+        logger.debug(f"Received single bulk message (or text only) from user {user_id}")
+        context.user_data.pop('bulk_collecting_media_group_id', None)
+        context.user_data.pop('bulk_collected_media', None)
+
+        # Extract message content
+        message_data = {
+            "text": text,
+            "media": [],
+            "timestamp": int(time.time())
+        }
+
+        # Get media content for single message
+        if media_type and file_id:
+            message_data["media"].append({"type": media_type, "file_id": file_id})
+
+        # Store the message
+        bulk_messages.append(message_data)
+        context.user_data["bulk_messages"] = bulk_messages
+        
+        # Show updated status
+        await show_bulk_messages_status(update, context)
 
 async def show_bulk_messages_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows the current status of collected bulk messages."""
@@ -1148,141 +1189,6 @@ async def handle_adm_bulk_remove_last_message(update: Update, context: ContextTy
     
     await query.answer(f"Removed: {text_preview}")
     await show_bulk_messages_status(update, context)
-
-async def show_bulk_drops_management(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows the bulk drops management interface where admin can add up to 10 drops."""
-    chat_id = update.effective_chat.id if update.effective_chat else update.message.chat_id
-    
-    bulk_template = context.user_data.get("bulk_template", {})
-    bulk_drops = context.user_data.get("bulk_drops", [])
-    
-    p_type = bulk_template.get("product_type", "")
-    size = bulk_template.get("size", "")
-    price = bulk_template.get("price", 0)
-    type_emoji = PRODUCT_TYPES.get(p_type, DEFAULT_PRODUCT_EMOJI)
-    price_str = format_currency(price)
-    
-    msg = f"📦 Bulk Products Management\n\n"
-    msg += f"{type_emoji} Type: {p_type}\n"
-    msg += f"📏 Size: {size}\n"
-    msg += f"💰 Price: {price_str}€\n\n"
-    
-    if not bulk_drops:
-        msg += "No drops added yet. You can add up to 10 drops.\n\n"
-    else:
-        msg += f"Added Drops ({len(bulk_drops)}/10):\n"
-        for i, drop in enumerate(bulk_drops, 1):
-            msg += f"{i}. {drop['city']} / {drop['district']}\n"
-        msg += "\n"
-    
-    keyboard = []
-    
-    # Add drop button (only if less than 10)
-    if len(bulk_drops) < 10:
-        keyboard.append([InlineKeyboardButton(f"➕ Add Drop Location ({len(bulk_drops)}/10)", callback_data="adm_bulk_add_drop")])
-    
-    # Remove last drop button (only if there are drops)
-    if bulk_drops:
-        keyboard.append([InlineKeyboardButton("🗑️ Remove Last Drop", callback_data="adm_bulk_remove_last")])
-        keyboard.append([InlineKeyboardButton("✅ Confirm & Create All Drops", callback_data="adm_bulk_confirm_all")])
-    
-    keyboard.append([InlineKeyboardButton("❌ Cancel Bulk Operation", callback_data="cancel_bulk_add")])
-    
-    if update.callback_query:
-        await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-    else:
-        await send_message_with_retry(context.bot, chat_id, msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-async def handle_adm_bulk_add_drop(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Shows city selection for adding a new drop to bulk operation."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
-    
-    bulk_drops = context.user_data.get("bulk_drops", [])
-    if len(bulk_drops) >= 10:
-        return await query.answer("Maximum 10 drops allowed!", show_alert=True)
-    
-    if not CITIES:
-        return await query.edit_message_text("No cities configured. Please add a city first via 'Manage Cities'.", parse_mode=None)
-    
-    sorted_city_ids = sorted(CITIES.keys(), key=lambda city_id: CITIES.get(city_id, ''))
-    keyboard = [[InlineKeyboardButton(f"🏙️ {CITIES.get(c,'N/A')}", callback_data=f"adm_bulk_drop_dist|{c}")] for c in sorted_city_ids]
-    keyboard.append([InlineKeyboardButton("⬅️ Back to Bulk Management", callback_data="adm_bulk_back_to_management")])
-    
-    await query.edit_message_text(f"📦 Add Drop Location ({len(bulk_drops)+1}/10)\n\nSelect city:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-async def handle_adm_bulk_drop_dist(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Shows district selection for adding a new drop to bulk operation."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
-    if not params: return await query.answer("Error: City ID missing.", show_alert=True)
-    
-    city_id = params[0]
-    city_name = CITIES.get(city_id)
-    if not city_name:
-        return await query.edit_message_text("Error: City not found. Please select again.", parse_mode=None)
-    
-    districts_in_city = DISTRICTS.get(city_id, {})
-    if not districts_in_city:
-        keyboard = [[InlineKeyboardButton("⬅️ Back to Cities", callback_data="adm_bulk_add_drop")]]
-        return await query.edit_message_text(f"No districts found for {city_name}.", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-    
-    sorted_district_ids = sorted(districts_in_city.keys(), key=lambda d_id: districts_in_city.get(d_id,''))
-    keyboard = [[InlineKeyboardButton(f"🏘️ {districts_in_city.get(d,'N/A')}", callback_data=f"adm_bulk_drop_confirm|{city_id}|{d}")] for d in sorted_district_ids]
-    keyboard.append([InlineKeyboardButton("⬅️ Back to Cities", callback_data="adm_bulk_add_drop")])
-    
-    bulk_drops = context.user_data.get("bulk_drops", [])
-    await query.edit_message_text(f"📦 Add Drop Location ({len(bulk_drops)+1}/10) - {city_name}\n\nSelect district:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
-
-async def handle_adm_bulk_drop_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Confirms adding a drop location to the bulk operation."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
-    if not params or len(params) < 2: return await query.answer("Error: City or District ID missing.", show_alert=True)
-    
-    city_id, dist_id = params
-    city_name = CITIES.get(city_id)
-    district_name = DISTRICTS.get(city_id, {}).get(dist_id)
-    
-    if not city_name or not district_name:
-        return await query.edit_message_text("Error: City/District not found. Please select again.", parse_mode=None)
-    
-    bulk_drops = context.user_data.get("bulk_drops", [])
-    
-    # Check if this location is already added
-    for drop in bulk_drops:
-        if drop["city"] == city_name and drop["district"] == district_name:
-            return await query.answer("This location is already added!", show_alert=True)
-    
-    if len(bulk_drops) >= 10:
-        return await query.answer("Maximum 10 drops allowed!", show_alert=True)
-    
-    # Add the new drop location
-    bulk_drops.append({
-        "city": city_name,
-        "district": district_name,
-        "city_id": city_id,
-        "district_id": dist_id
-    })
-    context.user_data["bulk_drops"] = bulk_drops
-    
-    await query.answer(f"Added: {city_name} / {district_name}")
-    await show_bulk_drops_management(update, context)
-
-async def handle_adm_bulk_remove_last(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
-    """Removes the last added drop from bulk operation."""
-    query = update.callback_query
-    if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
-    
-    bulk_drops = context.user_data.get("bulk_drops", [])
-    if not bulk_drops:
-        return await query.answer("No drops to remove!", show_alert=True)
-    
-    removed_drop = bulk_drops.pop()
-    context.user_data["bulk_drops"] = bulk_drops
-    
-    await query.answer(f"Removed: {removed_drop['city']} / {removed_drop['district']}")
-    await show_bulk_drops_management(update, context)
 
 async def handle_adm_bulk_back_to_management(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     """Returns to bulk management interface."""
@@ -1503,10 +1409,19 @@ async def cancel_bulk_add(update: Update, context: ContextTypes.DEFAULT_TYPE, pa
                     except Exception as e:
                         logger.error(f"Error cleaning bulk temp dir {temp_dir}: {e}")
     
+    # Cancel any scheduled bulk media group jobs
+    if 'bulk_collecting_media_group_id' in user_specific_data:
+        media_group_id = user_specific_data.get('bulk_collecting_media_group_id')
+        if media_group_id:
+            job_name = f"process_bulk_media_group_{user_id}_{media_group_id}"
+            remove_job_if_exists(job_name, context)
+            logger.info(f"Cancelled bulk media group job: {job_name}")
+    
     # Clear all bulk-related data
     keys_to_clear = ["state", "bulk_template", "bulk_drops", "bulk_admin_city_id", "bulk_admin_district_id", 
                      "bulk_admin_product_type", "bulk_admin_city", "bulk_admin_district", 
-                     "bulk_pending_drop_size", "bulk_pending_drop_price", "bulk_messages", "bulk_processing_groups"]
+                     "bulk_pending_drop_size", "bulk_pending_drop_price", "bulk_messages", "bulk_processing_groups",
+                     "bulk_collected_media", "bulk_collecting_media_group_id"]
     for key in keys_to_clear:
         user_specific_data.pop(key, None)
     
@@ -4175,3 +4090,162 @@ async def handle_adm_bulk_execute(update: Update, context: ContextTypes.DEFAULT_
     ]
     
     await send_message_with_retry(context.bot, chat_id, result_msg, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=None)
+
+# --- Job Function to Process Collected Bulk Media Group ---
+async def _process_bulk_collected_media(context: ContextTypes.DEFAULT_TYPE):
+    """Job callback to process a collected bulk media group."""
+    job_data = context.job.data
+    user_id = job_data.get("user_id")
+    chat_id = job_data.get("chat_id")
+    media_group_id = job_data.get("media_group_id")
+
+    if not user_id or not chat_id or not media_group_id:
+        logger.error(f"Bulk job _process_bulk_collected_media missing user_id, chat_id, or media_group_id in data: {job_data}")
+        return
+
+    logger.info(f"Bulk job executing: Process media group {media_group_id} for user {user_id}")
+    user_data = context.application.user_data.get(user_id, {})
+    if not user_data:
+        logger.error(f"Bulk job {media_group_id}: Could not find user_data for user {user_id}.")
+        return
+
+    collected_info = user_data.get('bulk_collected_media', {}).get(media_group_id)
+    if not collected_info or 'media' not in collected_info:
+        logger.warning(f"Bulk job {media_group_id}: No collected media info found in user_data for user {user_id}. Might be already processed or cancelled.")
+        user_data.pop('bulk_collecting_media_group_id', None)
+        if 'bulk_collected_media' in user_data:
+            user_data['bulk_collected_media'].pop(media_group_id, None)
+            if not user_data['bulk_collected_media']:
+                user_data.pop('bulk_collected_media', None)
+        return
+
+    collected_media = collected_info.get('media', [])
+    caption = collected_info.get('caption', '')
+
+    user_data.pop('bulk_collecting_media_group_id', None)
+    if 'bulk_collected_media' in user_data and media_group_id in user_data['bulk_collected_media']:
+        del user_data['bulk_collected_media'][media_group_id]
+        if not user_data['bulk_collected_media']:
+            user_data.pop('bulk_collected_media', None)
+
+    # Add the completed media group as a single message to bulk_messages
+    bulk_messages = user_data.get("bulk_messages", [])
+    
+    if len(bulk_messages) >= 10:
+        logger.warning(f"Bulk job {media_group_id}: Already have 10 messages, ignoring this group")
+        return
+    
+    message_data = {
+        "text": caption,
+        "media": collected_media,
+        "timestamp": int(time.time())
+    }
+    
+    bulk_messages.append(message_data)
+    user_data["bulk_messages"] = bulk_messages
+    
+    # Create a fake update object to show status
+    from telegram import Update, Message, Chat, User
+    fake_update = Update(
+        update_id=0,
+        effective_chat=Chat(id=chat_id, type="private"),
+        effective_user=User(id=user_id, first_name="Admin", is_bot=False),
+        message=Message(
+            message_id=0,
+            date=datetime.now(),
+            chat=Chat(id=chat_id, type="private")
+        )
+    )
+    
+    # Show updated status
+    await show_bulk_messages_status(fake_update, context)
+
+
+async def handle_adm_bulk_drop_details_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles collecting multiple different messages for bulk products."""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    if user_id != ADMIN_ID: return
+    if not update.message: return
+    if context.user_data.get("state") != "awaiting_bulk_messages": return
+
+    bulk_messages = context.user_data.get("bulk_messages", [])
+    
+    # Check if we've reached the limit
+    if len(bulk_messages) >= 10:
+        await send_message_with_retry(context.bot, chat_id, 
+            "❌ You've already collected 10 messages (maximum). Please finish creating the products or cancel the operation.", 
+            parse_mode=None)
+        return
+
+    media_group_id = update.message.media_group_id
+    job_name = f"process_bulk_media_group_{user_id}_{media_group_id}" if media_group_id else None
+
+    media_type, file_id = None, None
+    if update.message.photo: media_type, file_id = "photo", update.message.photo[-1].file_id
+    elif update.message.video: media_type, file_id = "video", update.message.video.file_id
+    elif update.message.animation: media_type, file_id = "animation", update.message.animation.file_id
+
+    text = (update.message.caption or update.message.text or "").strip()
+
+    if media_group_id:
+        logger.debug(f"Received bulk message part of media group {media_group_id} from user {user_id}")
+        if 'bulk_collected_media' not in context.user_data:
+            context.user_data['bulk_collected_media'] = {}
+
+        if media_group_id not in context.user_data['bulk_collected_media']:
+            context.user_data['bulk_collected_media'][media_group_id] = {'media': [], 'caption': None}
+            logger.info(f"Started collecting bulk media for group {media_group_id} user {user_id}")
+            context.user_data['bulk_collecting_media_group_id'] = media_group_id
+
+        if media_type and file_id:
+            if not any(m['file_id'] == file_id for m in context.user_data['bulk_collected_media'][media_group_id]['media']):
+                context.user_data['bulk_collected_media'][media_group_id]['media'].append(
+                    {'type': media_type, 'file_id': file_id}
+                )
+                logger.debug(f"Added bulk media {file_id} ({media_type}) to group {media_group_id}")
+
+        if text:
+            context.user_data['bulk_collected_media'][media_group_id]['caption'] = text
+            logger.debug(f"Stored/updated bulk caption for group {media_group_id}")
+
+        remove_job_if_exists(job_name, context)
+        if hasattr(context, 'job_queue') and context.job_queue:
+            context.job_queue.run_once(
+                _process_bulk_collected_media,
+                when=timedelta(seconds=MEDIA_GROUP_COLLECTION_DELAY),
+                data={'media_group_id': media_group_id, 'chat_id': chat_id, 'user_id': user_id},
+                name=job_name,
+                job_kwargs={'misfire_grace_time': 15}
+            )
+            logger.debug(f"Scheduled/Rescheduled bulk job {job_name} for media group {media_group_id}")
+        else:
+            logger.error("JobQueue not found in context. Cannot schedule bulk media group processing.")
+            await send_message_with_retry(context.bot, chat_id, "❌ Error: Internal components missing. Cannot process media group.", parse_mode=None)
+
+    else:
+        if context.user_data.get('bulk_collecting_media_group_id'):
+            logger.warning(f"Received single bulk message from user {user_id} while potentially collecting media group {context.user_data['bulk_collecting_media_group_id']}. Ignoring for bulk.")
+            return
+
+        logger.debug(f"Received single bulk message (or text only) from user {user_id}")
+        context.user_data.pop('bulk_collecting_media_group_id', None)
+        context.user_data.pop('bulk_collected_media', None)
+
+        # Extract message content
+        message_data = {
+            "text": text,
+            "media": [],
+            "timestamp": int(time.time())
+        }
+
+        # Get media content for single message
+        if media_type and file_id:
+            message_data["media"].append({"type": media_type, "file_id": file_id})
+
+        # Store the message
+        bulk_messages.append(message_data)
+        context.user_data["bulk_messages"] = bulk_messages
+        
+        # Show updated status
+        await show_bulk_messages_status(update, context)
