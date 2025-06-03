@@ -1055,14 +1055,17 @@ async def handle_adm_bulk_drop_details_message(update: Update, context: ContextT
 
     text = (update.message.caption or update.message.text or "").strip()
 
+    # Debug logging
+    logger.info(f"BULK DEBUG: User {user_id} sent message. Media Group ID: {media_group_id}, Media Type: {media_type}, Text: '{text[:50]}...', Current bulk messages count: {len(bulk_messages)}")
+
     if media_group_id:
-        logger.debug(f"Received bulk message part of media group {media_group_id} from user {user_id}")
+        logger.info(f"BULK DEBUG: Processing media group {media_group_id} from user {user_id}")
         if 'bulk_collected_media' not in context.user_data:
             context.user_data['bulk_collected_media'] = {}
 
         if media_group_id not in context.user_data['bulk_collected_media']:
             context.user_data['bulk_collected_media'][media_group_id] = {'media': [], 'caption': None}
-            logger.info(f"Started collecting bulk media for group {media_group_id} user {user_id}")
+            logger.info(f"BULK DEBUG: Started collecting bulk media for group {media_group_id} user {user_id}")
             context.user_data['bulk_collecting_media_group_id'] = media_group_id
 
         if media_type and file_id:
@@ -1070,11 +1073,11 @@ async def handle_adm_bulk_drop_details_message(update: Update, context: ContextT
                 context.user_data['bulk_collected_media'][media_group_id]['media'].append(
                     {'type': media_type, 'file_id': file_id}
                 )
-                logger.debug(f"Added bulk media {file_id} ({media_type}) to group {media_group_id}")
+                logger.info(f"BULK DEBUG: Added bulk media {file_id} ({media_type}) to group {media_group_id}. Group now has {len(context.user_data['bulk_collected_media'][media_group_id]['media'])} media items")
 
         if text:
             context.user_data['bulk_collected_media'][media_group_id]['caption'] = text
-            logger.debug(f"Stored/updated bulk caption for group {media_group_id}")
+            logger.info(f"BULK DEBUG: Stored/updated bulk caption for group {media_group_id}: '{text[:50]}...'")
 
         remove_job_if_exists(job_name, context)
         if hasattr(context, 'job_queue') and context.job_queue:
@@ -1085,17 +1088,17 @@ async def handle_adm_bulk_drop_details_message(update: Update, context: ContextT
                 name=job_name,
                 job_kwargs={'misfire_grace_time': 15}
             )
-            logger.debug(f"Scheduled/Rescheduled bulk job {job_name} for media group {media_group_id}")
+            logger.info(f"BULK DEBUG: Scheduled bulk job {job_name} for media group {media_group_id} to run in {MEDIA_GROUP_COLLECTION_DELAY} seconds")
         else:
             logger.error("JobQueue not found in context. Cannot schedule bulk media group processing.")
             await send_message_with_retry(context.bot, chat_id, "❌ Error: Internal components missing. Cannot process media group.", parse_mode=None)
 
     else:
         if context.user_data.get('bulk_collecting_media_group_id'):
-            logger.warning(f"Received single bulk message from user {user_id} while potentially collecting media group {context.user_data['bulk_collecting_media_group_id']}. Ignoring for bulk.")
+            logger.warning(f"BULK DEBUG: Received single bulk message from user {user_id} while potentially collecting media group {context.user_data['bulk_collecting_media_group_id']}. Ignoring for bulk.")
             return
 
-        logger.debug(f"Received single bulk message (or text only) from user {user_id}")
+        logger.info(f"BULK DEBUG: Received single bulk message (or text only) from user {user_id}. Adding as individual message.")
         context.user_data.pop('bulk_collecting_media_group_id', None)
         context.user_data.pop('bulk_collected_media', None)
 
@@ -1113,6 +1116,8 @@ async def handle_adm_bulk_drop_details_message(update: Update, context: ContextT
         # Store the message
         bulk_messages.append(message_data)
         context.user_data["bulk_messages"] = bulk_messages
+        
+        logger.info(f"BULK DEBUG: Added single message to bulk_messages. New count: {len(bulk_messages)}")
         
         # Show updated status
         await show_bulk_messages_status(update, context)
@@ -1194,7 +1199,11 @@ async def handle_adm_bulk_back_to_management(update: Update, context: ContextTyp
     """Returns to bulk management interface."""
     query = update.callback_query
     if query.from_user.id != ADMIN_ID: return await query.answer("Access denied.", show_alert=True)
-    await show_bulk_drops_management(update, context)
+    
+    # This function is no longer needed since we switched to message-based bulk instead of location-based
+    # Redirect to the message collection status
+    context.user_data["state"] = "awaiting_bulk_messages"
+    await show_bulk_messages_status(update, context)
 
 async def handle_adm_bulk_confirm_all(update: Update, context: ContextTypes.DEFAULT_TYPE, params=None):
     """Confirms and creates all products from the collected messages."""
@@ -4103,15 +4112,15 @@ async def _process_bulk_collected_media(context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Bulk job _process_bulk_collected_media missing user_id, chat_id, or media_group_id in data: {job_data}")
         return
 
-    logger.info(f"Bulk job executing: Process media group {media_group_id} for user {user_id}")
+    logger.info(f"BULK JOB DEBUG: Processing media group {media_group_id} for user {user_id}")
     user_data = context.application.user_data.get(user_id, {})
     if not user_data:
-        logger.error(f"Bulk job {media_group_id}: Could not find user_data for user {user_id}.")
+        logger.error(f"BULK JOB DEBUG: Could not find user_data for user {user_id}")
         return
 
     collected_info = user_data.get('bulk_collected_media', {}).get(media_group_id)
     if not collected_info or 'media' not in collected_info:
-        logger.warning(f"Bulk job {media_group_id}: No collected media info found in user_data for user {user_id}. Might be already processed or cancelled.")
+        logger.warning(f"BULK JOB DEBUG: No collected media info found for group {media_group_id}. User might have cancelled or group already processed.")
         user_data.pop('bulk_collecting_media_group_id', None)
         if 'bulk_collected_media' in user_data:
             user_data['bulk_collected_media'].pop(media_group_id, None)
@@ -4121,6 +4130,8 @@ async def _process_bulk_collected_media(context: ContextTypes.DEFAULT_TYPE):
 
     collected_media = collected_info.get('media', [])
     caption = collected_info.get('caption', '')
+    
+    logger.info(f"BULK JOB DEBUG: Processing group {media_group_id} with {len(collected_media)} media items and caption: '{caption[:50]}...'")
 
     user_data.pop('bulk_collecting_media_group_id', None)
     if 'bulk_collected_media' in user_data and media_group_id in user_data['bulk_collected_media']:
@@ -4132,7 +4143,7 @@ async def _process_bulk_collected_media(context: ContextTypes.DEFAULT_TYPE):
     bulk_messages = user_data.get("bulk_messages", [])
     
     if len(bulk_messages) >= 10:
-        logger.warning(f"Bulk job {media_group_id}: Already have 10 messages, ignoring this group")
+        logger.warning(f"BULK JOB DEBUG: Already have 10 messages, ignoring group {media_group_id}")
         return
     
     message_data = {
@@ -4143,6 +4154,8 @@ async def _process_bulk_collected_media(context: ContextTypes.DEFAULT_TYPE):
     
     bulk_messages.append(message_data)
     user_data["bulk_messages"] = bulk_messages
+    
+    logger.info(f"BULK JOB DEBUG: Added media group {media_group_id} as single message to bulk_messages. New count: {len(bulk_messages)}")
     
     # Create a fake update object to show status
     from telegram import Update, Message, Chat, User
@@ -4188,14 +4201,17 @@ async def handle_adm_bulk_drop_details_message(update: Update, context: ContextT
 
     text = (update.message.caption or update.message.text or "").strip()
 
+    # Debug logging
+    logger.info(f"BULK DEBUG: User {user_id} sent message. Media Group ID: {media_group_id}, Media Type: {media_type}, Text: '{text[:50]}...', Current bulk messages count: {len(bulk_messages)}")
+
     if media_group_id:
-        logger.debug(f"Received bulk message part of media group {media_group_id} from user {user_id}")
+        logger.info(f"BULK DEBUG: Processing media group {media_group_id} from user {user_id}")
         if 'bulk_collected_media' not in context.user_data:
             context.user_data['bulk_collected_media'] = {}
 
         if media_group_id not in context.user_data['bulk_collected_media']:
             context.user_data['bulk_collected_media'][media_group_id] = {'media': [], 'caption': None}
-            logger.info(f"Started collecting bulk media for group {media_group_id} user {user_id}")
+            logger.info(f"BULK DEBUG: Started collecting bulk media for group {media_group_id} user {user_id}")
             context.user_data['bulk_collecting_media_group_id'] = media_group_id
 
         if media_type and file_id:
@@ -4203,11 +4219,11 @@ async def handle_adm_bulk_drop_details_message(update: Update, context: ContextT
                 context.user_data['bulk_collected_media'][media_group_id]['media'].append(
                     {'type': media_type, 'file_id': file_id}
                 )
-                logger.debug(f"Added bulk media {file_id} ({media_type}) to group {media_group_id}")
+                logger.info(f"BULK DEBUG: Added bulk media {file_id} ({media_type}) to group {media_group_id}. Group now has {len(context.user_data['bulk_collected_media'][media_group_id]['media'])} media items")
 
         if text:
             context.user_data['bulk_collected_media'][media_group_id]['caption'] = text
-            logger.debug(f"Stored/updated bulk caption for group {media_group_id}")
+            logger.info(f"BULK DEBUG: Stored/updated bulk caption for group {media_group_id}: '{text[:50]}...'")
 
         remove_job_if_exists(job_name, context)
         if hasattr(context, 'job_queue') and context.job_queue:
@@ -4218,17 +4234,17 @@ async def handle_adm_bulk_drop_details_message(update: Update, context: ContextT
                 name=job_name,
                 job_kwargs={'misfire_grace_time': 15}
             )
-            logger.debug(f"Scheduled/Rescheduled bulk job {job_name} for media group {media_group_id}")
+            logger.info(f"BULK DEBUG: Scheduled bulk job {job_name} for media group {media_group_id} to run in {MEDIA_GROUP_COLLECTION_DELAY} seconds")
         else:
             logger.error("JobQueue not found in context. Cannot schedule bulk media group processing.")
             await send_message_with_retry(context.bot, chat_id, "❌ Error: Internal components missing. Cannot process media group.", parse_mode=None)
 
     else:
         if context.user_data.get('bulk_collecting_media_group_id'):
-            logger.warning(f"Received single bulk message from user {user_id} while potentially collecting media group {context.user_data['bulk_collecting_media_group_id']}. Ignoring for bulk.")
+            logger.warning(f"BULK DEBUG: Received single bulk message from user {user_id} while potentially collecting media group {context.user_data['bulk_collecting_media_group_id']}. Ignoring for bulk.")
             return
 
-        logger.debug(f"Received single bulk message (or text only) from user {user_id}")
+        logger.info(f"BULK DEBUG: Received single bulk message (or text only) from user {user_id}. Adding as individual message.")
         context.user_data.pop('bulk_collecting_media_group_id', None)
         context.user_data.pop('bulk_collected_media', None)
 
@@ -4246,6 +4262,8 @@ async def handle_adm_bulk_drop_details_message(update: Update, context: ContextT
         # Store the message
         bulk_messages.append(message_data)
         context.user_data["bulk_messages"] = bulk_messages
+        
+        logger.info(f"BULK DEBUG: Added single message to bulk_messages. New count: {len(bulk_messages)}")
         
         # Show updated status
         await show_bulk_messages_status(update, context)
